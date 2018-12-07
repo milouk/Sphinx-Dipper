@@ -1,0 +1,40 @@
+diff --git a/Makefile b/Makefile
+index 2eaefd700928..389524c2a98a 100644
+--- a/Makefile
++++ b/Makefile
+@@ -392,7 +392,7 @@ KBUILD_AFLAGS   := -D__ASSEMBLY__
+ KBUILD_CFLAGS   := -Wall -Wundef -Wno-strict-prototypes -Wno-trigraphs \
+ 		   -fno-strict-aliasing -fno-common -fshort-wchar \
+ 		   -Werror-implicit-function-declaration \
+-		   -Wno-format-security -ffast-math -march=armv8.3-a+crypto -mtune=kryo\
++		   -Wno-format-security -ffast-math -march=armv8.3-a+crypto -mtune=cortex-a55\
+ 		   -std=gnu89
+ 
+ #GCC 5.x.x
+diff --git a/arch/arm64/configs/sphinx_defconfig b/arch/arm64/configs/sphinx_defconfig
+index 81b61e05ce2b..290478d72dba 100644
+--- a/arch/arm64/configs/sphinx_defconfig
++++ b/arch/arm64/configs/sphinx_defconfig
+@@ -403,6 +403,7 @@ CONFIG_LOGO=y
+ CONFIG_SOUND=y
+ CONFIG_SND=y
+ CONFIG_SND_DYNAMIC_MINORS=y
++CONFIG_SND_USB=y
+ CONFIG_SND_USB_AUDIO=y
+ CONFIG_SND_USB_AUDIO_QMI=y
+ CONFIG_SND_SOC=y
+@@ -681,7 +682,7 @@ CONFIG_MACH_XIAOMI_E1=y
+ #
+ # Local Version
+ #
+-CONFIG_LOCALVERSION="-Sphinx-1.9"
++CONFIG_LOCALVERSION="-Sphinx-1.9-Beta-Akira"
+ # CONFIG_LOCALVERSION_AUTO is not set
+ CONFIG_DEFAULT_HOSTNAME="(none)"
+ 
+@@ -778,6 +779,7 @@ CONFIG_TCP_CONG_ILLINOIS=y
+ CONFIG_TCP_CONG_BBR=y
+ CONFIG_TCP_CONG_DCTCP=y
+ CONFIG_TCP_CONG_SOCIOPATH=y
++CONFIG_TCP_CONG_NANQINLANG=y
+ CONFIG_DEFAULT_WESTWOOD=y
