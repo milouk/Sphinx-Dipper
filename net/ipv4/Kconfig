@@ -662,6 +662,11 @@ config TCP_CONG_SOCIOPATH
         This is basically TCP Reno with no slow start and a much more
         aggressive ssthresh recalculation (lowers it by 5% instead of 50%).
         Use responsibly!
+config TCP_CONG_NANQINLANG
+        tristate "TCP nanqinlang"
+        default n
+       ---help---
+        This is basically TCP BBR with violence.
 
 choice
 	prompt "Default TCP congestion control"
@@ -728,6 +733,7 @@ config DEFAULT_TCP_CONG
 	default "cdg" if DEFAULT_CDG
 	default "bbr" if DEFAULT_BBR
 	default "sociopath" if DEFAULT_SOCIOPATH
+	default "nanqinlang" if DEFAULT_NANQINLANG
 	default "cubic"
 
 config TCP_MD5SIG
