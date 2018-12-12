@@ -668,29 +668,6 @@ CONFIG_CRYPTO_CRC32_ARM64=y
 CONFIG_QMI_ENCDEC=y
 CONFIG_MACH_XIAOMI_E1N=y
 
-#####################
-#                   #
-#  Sphinx Features  #
-#                   #
-#####################
-
-
-#
-# Local Version
-#
-CONFIG_LOCALVERSION="-Sphinx-"
-# CONFIG_LOCALVERSION_AUTO is not set
-CONFIG_DEFAULT_HOSTNAME="(none)"
-
-
-#
-#Kali Nethunter
-#
-CONFIG_CFG80211=y
-CONFIG_MAC80211=y
-CONFIG_ATH9K=y
-CONFIG_ATH9K_PCI=y
-CONFIG_ATH9K_HTC=y
 
 #####################
 #                   #
