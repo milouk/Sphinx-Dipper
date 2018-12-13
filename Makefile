@@ -401,14 +401,14 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -std=gnu89
 #GCC 5.x.x
 KBUILD_CFLAGS += -fdiagnostics-color=always -fdiagnostics-show-option \
-		   -Wno-maybe-uninitialized -Wno-unused-variable -Wno-unused-function \
-           -Wno-unused-label -Wno-memset-transposed-args -Wno-bool-compare \
-           -Wno-logical-not-parentheses -Wno-discarded-array-qualifiers \
-		   -Wno-array-bounds -Wno-error=incompatible-pointer-types \
+           -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration \
+           -Wno-unused-variable -Wno-unused-function \
+           -Wno-unused-label -Wno-logical-not-parentheses \
+	   -Wno-array-bounds -Wno-error=incompatible-pointer-types \
            -Wno-incompatible-pointer-types -Wno-pointer-sign \
            -Wno-parentheses -Wno-nonnull -Wno-attributes -Wno-sizeof-pointer-memaccess
 #GCC 6.x.x
-KBUILD_CFLAGS += -Wno-misleading-indentation -Wno-shift-overflow 
+KBUILD_CFLAGS += -Wno-shift-overflow
 #GCC 7.x.x
 KBUILD_CFLAGS += -Wno-duplicate-decl-specifier -Wno-memset-elt-size -Wno-bool-operation \
                  -Wno-switch-unreachable
@@ -542,7 +542,6 @@ KBUILD_CFLAGS += $(call cc-disable-warning, unused-variable)
 KBUILD_CFLAGS += $(call cc-disable-warning, format-invalid-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
 KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
-KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
 # CLANG uses a _MergedGlobals as optimization, but this breaks modpost, as the
