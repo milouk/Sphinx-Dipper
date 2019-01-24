@@ -167,19 +167,20 @@ int cam_req_mgr_workq_enqueue_task(struct crm_workq_task *task,
 		&workq->task.process_head[task->priority]);
 
 	atomic_add(1, &workq->task.pending_cnt);
-	WORKQ_RELEASE_LOCK(workq, flags);
 	CAM_DBG(CAM_CRM, "enq task %pK pending_cnt %d",
 		task, atomic_read(&workq->task.pending_cnt));
 
 	queue_work(workq->job, &workq->work);
+	WORKQ_RELEASE_LOCK(workq, flags);
 end:
 	return rc;
 }
 
 int cam_req_mgr_workq_create(char *name, int32_t num_tasks,
-	struct cam_req_mgr_core_workq **workq, enum crm_workq_context in_irq)
+	struct cam_req_mgr_core_workq **workq, enum crm_workq_context in_irq,
+	int flags)
 {
-	int32_t i;
+	int32_t i, wq_flags = 0, max_active_tasks = 0;
 	struct crm_workq_task  *task;
 	struct cam_req_mgr_core_workq *crm_workq = NULL;
 	char buf[128] = "crm_workq-";
@@ -191,10 +192,17 @@ int cam_req_mgr_workq_create(char *name, int32_t num_tasks,
 		if (crm_workq == NULL)
 			return -ENOMEM;
 
+		wq_flags |= WQ_UNBOUND;
+		if (flags & CAM_WORKQ_FLAG_HIGH_PRIORITY)
+			wq_flags |= WQ_HIGHPRI;
+
+		if (flags & CAM_WORKQ_FLAG_SERIAL)
+			max_active_tasks = 1;
+
 		strlcat(buf, name, sizeof(buf));
 		CAM_DBG(CAM_CRM, "create workque crm_workq-%s", name);
 		crm_workq->job = alloc_workqueue(buf,
-			WQ_HIGHPRI | WQ_UNBOUND, 0, NULL);
+			wq_flags, max_active_tasks, NULL);
 		if (!crm_workq->job) {
 			kfree(crm_workq);
 			return -ENOMEM;
@@ -219,7 +227,7 @@ int cam_req_mgr_workq_create(char *name, int32_t num_tasks,
 				crm_workq->task.num_task,
 				GFP_KERNEL);
 		if (!crm_workq->task.pool) {
-			CAM_WARN(CAM_CRM, "Insufficient memory %lu",
+			CAM_WARN(CAM_CRM, "Insufficient memory %zu",
 				sizeof(struct crm_workq_task) *
 				crm_workq->task.num_task);
 			kfree(crm_workq);
@@ -253,13 +261,8 @@ void cam_req_mgr_workq_destroy(struct cam_req_mgr_core_workq **crm_workq)
 			WORKQ_RELEASE_LOCK(*crm_workq, flags);
 			cancel_work_sync(&(*crm_workq)->work);
 			destroy_workqueue(job);
-		} else {
+		} else
 			WORKQ_RELEASE_LOCK(*crm_workq, flags);
-		}
-
-		/* Destroy workq payload data */
-		kfree((*crm_workq)->task.pool[0].payload);
-		(*crm_workq)->task.pool[0].payload = NULL;
 		kfree((*crm_workq)->task.pool);
 		kfree(*crm_workq);
 		*crm_workq = NULL;

@@ -13,6 +13,7 @@
 #ifndef _CAM_IFE_HW_MGR_H_
 #define _CAM_IFE_HW_MGR_H_
 
+#include <linux/completion.h>
 #include "cam_isp_hw_mgr.h"
 #include "cam_vfe_hw_intf.h"
 #include "cam_ife_csid_hw_intf.h"
@@ -53,7 +54,7 @@ enum cam_ife_hw_mgr_res_type {
  */
 struct cam_ife_hw_mgr_res {
 	struct list_head                 list;
-	enum cam_ife_hw_mgr_res_type     res_type;
+	uint32_t                         res_type;
 	uint32_t                         res_id;
 	uint32_t                         is_dual_vfe;
 	struct cam_isp_resource_node    *hw_res[CAM_ISP_HW_SPLIT_MAX];
@@ -80,15 +81,17 @@ struct ctx_base_info {
 /**
  * struct cam_ife_hw_mgr_debug - contain the debug information
  *
- * @dentry:              Debugfs entry
- * @csid_debug:          csid debug information
- * @enable_recovery      enable recovery
+ * @dentry:                    Debugfs entry
+ * @csid_debug:                csid debug information
+ * @enable_recovery:           enable recovery
+ * @enable_diag_sensor_status: enable sensor diagnosis status
  *
  */
 struct cam_ife_hw_mgr_debug {
 	struct dentry  *dentry;
 	uint64_t       csid_debug;
 	uint32_t       enable_recovery;
+	uint32_t       camif_debug;
 };
 
 /* enum cam_ife_hw_mgr_ctx_state - state of the context */
@@ -130,6 +133,8 @@ enum cam_ife_hw_mgr_ctx_state {
  * @overflow_pending        flat to specify the overflow is pending for the
  *                          context
  * @is_rdi_only_context     flag to specify the context has only rdi resource
+ * @config_done_complete    indicator for configuration complete
+ * @init_done               indicate whether init hw is done
  */
 struct cam_ife_hw_mgr_ctx {
 	struct list_head                list;
@@ -162,6 +167,8 @@ struct cam_ife_hw_mgr_ctx {
 	uint32_t                        eof_cnt[CAM_IFE_HW_NUM_MAX];
 	atomic_t                        overflow_pending;
 	uint32_t                        is_rdi_only_context;
+	struct completion               config_done_complete;
+	bool                            init_done;
 };
 
 /**
@@ -207,9 +214,10 @@ struct cam_ife_hw_mgr {
  *                      etnry functinon for the IFE HW manager.
  *
  * @hw_mgr_intf:        IFE hardware manager object returned
+ * @iommu_hdl:          Iommu handle to be returned
  *
  */
-int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf);
+int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf, int *iommu_hdl);
 
 /**
  * cam_ife_mgr_do_tasklet_buf_done()
