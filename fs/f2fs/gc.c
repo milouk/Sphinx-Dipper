@@ -16,6 +16,8 @@
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/freezer.h>
+#include <linux/msm_drm_notify.h>
+#include <linux/power_supply.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -23,14 +25,34 @@
 #include "gc.h"
 #include <trace/events/f2fs.h>
 
+#define TRIGGER_SOFF (!screen_on && power_supply_is_system_supplied())
+static bool screen_on = true;
+// Use 1 instead of 0 to allow thread interrupts
+#define SOFF_WAIT_MS 1
+
+static inline void gc_set_wakelock(struct f2fs_sb_info *sbi,
+		struct f2fs_gc_kthread *gc_th, bool val)
+{
+	if (val) {
+		if (!gc_th->gc_wakelock.active) {
+			f2fs_msg(sbi->sb, KERN_INFO, "Catching wakelock for GC");
+			__pm_stay_awake(&gc_th->gc_wakelock);
+		}
+	} else {
+		if (gc_th->gc_wakelock.active) {
+			f2fs_msg(sbi->sb, KERN_INFO, "Unlocking wakelock for GC");
+			__pm_relax(&gc_th->gc_wakelock);
+		}
+	}
+}
+
 static int gc_thread_func(void *data)
 {
 	struct f2fs_sb_info *sbi = data;
 	struct f2fs_gc_kthread *gc_th = sbi->gc_thread;
 	wait_queue_head_t *wq = &sbi->gc_thread->gc_wait_queue_head;
-	unsigned int wait_ms;
-
-	wait_ms = gc_th->min_sleep_time;
+	unsigned int wait_ms = gc_th->min_sleep_time;
+	bool force_gc;
 
 	set_freezable();
 	do {
@@ -38,6 +60,17 @@ static int gc_thread_func(void *data)
 				kthread_should_stop() || freezing(current) ||
 				gc_th->gc_wake,
 				msecs_to_jiffies(wait_ms));
+
+		force_gc = TRIGGER_SOFF;
+		if (force_gc) {
+			gc_set_wakelock(sbi, gc_th, true);
+			wait_ms = SOFF_WAIT_MS;
+			gc_th->gc_urgent = 1;
+		} else {
+			gc_set_wakelock(sbi, gc_th, false);
+			wait_ms = gc_th->min_sleep_time;
+			gc_th->gc_urgent = 0;
+		}
 
 		/* give it a try one time */
 		if (gc_th->gc_wake)
@@ -49,7 +82,8 @@ static int gc_thread_func(void *data)
 			break;
 
 		if (sbi->sb->s_writers.frozen >= SB_FREEZE_WRITE) {
-			increase_sleep_time(gc_th, &wait_ms);
+			if (!force_gc)
+				increase_sleep_time(gc_th, &wait_ms);
 			continue;
 		}
 
@@ -76,8 +110,9 @@ static int gc_thread_func(void *data)
 		 * invalidated soon after by user update or deletion.
 		 * So, I'd like to wait some time to collect dirty segments.
 		 */
-		if (gc_th->gc_urgent) {
-			wait_ms = gc_th->urgent_sleep_time;
+		if (gc_th->gc_urgent || force_gc) {
+			if (!force_gc)
+				wait_ms = gc_th->urgent_sleep_time;
 			mutex_lock(&sbi->gc_mutex);
 			goto do_gc;
 		}
@@ -99,8 +134,14 @@ do_gc:
 		stat_inc_bggc_count(sbi);
 
 		/* if return value is not zero, no victim was selected */
-		if (f2fs_gc(sbi, test_opt(sbi, FORCE_FG_GC), true, NULL_SEGNO))
+		if (f2fs_gc(sbi, force_gc || test_opt(sbi, FORCE_FG_GC), true, NULL_SEGNO)) {
 			wait_ms = gc_th->no_gc_sleep_time;
+			gc_set_wakelock(sbi, gc_th, false);
+			gc_th->gc_urgent = 0;
+			f2fs_msg(sbi->sb, KERN_INFO,
+				"No more GC victim found, "
+				"sleeping for %u ms", wait_ms);
+		}
 
 		trace_f2fs_background_gc(sbi->sb, wait_ms,
 				prefree_segments(sbi), free_segments(sbi));
@@ -119,6 +160,10 @@ int start_gc_thread(struct f2fs_sb_info *sbi)
 	struct f2fs_gc_kthread *gc_th;
 	dev_t dev = sbi->sb->s_bdev->bd_dev;
 	int err = 0;
+	char buf[25];
+
+	if (sbi->gc_thread != NULL)
+		goto out;
 
 	gc_th = f2fs_kmalloc(sbi, sizeof(struct f2fs_gc_kthread), GFP_KERNEL);
 	if (!gc_th) {
@@ -135,10 +180,13 @@ int start_gc_thread(struct f2fs_sb_info *sbi)
 	gc_th->gc_urgent = 0;
 	gc_th->gc_wake= 0;
 
+	snprintf(buf, sizeof(buf), "f2fs_gc-%u:%u", MAJOR(dev), MINOR(dev));
+
+	wakeup_source_init(&gc_th->gc_wakelock, buf);
+
 	sbi->gc_thread = gc_th;
 	init_waitqueue_head(&sbi->gc_thread->gc_wait_queue_head);
-	sbi->gc_thread->f2fs_gc_task = kthread_run(gc_thread_func, sbi,
-			"f2fs_gc-%u:%u", MAJOR(dev), MINOR(dev));
+	sbi->gc_thread->f2fs_gc_task = kthread_run(gc_thread_func, sbi, buf);
 	if (IS_ERR(gc_th->f2fs_gc_task)) {
 		err = PTR_ERR(gc_th->f2fs_gc_task);
 		kfree(gc_th);
@@ -154,9 +202,129 @@ void stop_gc_thread(struct f2fs_sb_info *sbi)
 	if (!gc_th)
 		return;
 	kthread_stop(gc_th->f2fs_gc_task);
+	wakeup_source_trash(&gc_th->gc_wakelock);
 	kfree(gc_th);
 	sbi->gc_thread = NULL;
 }
+
+static LIST_HEAD(f2fs_sbi_list);
+static DEFINE_MUTEX(f2fs_sbi_mutex);
+/* Trigger rapid GC when invalid block is higher than 3% */
+#define RAPID_GC_LIMIT_INVALID_BLOCK 3
+
+void f2fs_start_all_gc_threads(void)
+{
+	struct f2fs_sb_info *sbi;
+	block_t invalid_blocks;
+
+	mutex_lock(&f2fs_sbi_mutex);
+	list_for_each_entry(sbi, &f2fs_sbi_list, list) {
+		invalid_blocks = sbi->user_block_count -
+					written_block_count(sbi) -
+					free_user_blocks(sbi);
+		if (invalid_blocks >
+		    ((long)((sbi->user_block_count - written_block_count(sbi)) *
+			RAPID_GC_LIMIT_INVALID_BLOCK) / 100)) {
+			start_gc_thread(sbi);
+			sbi->gc_thread->gc_wake = 1;
+			wake_up_interruptible_all(&sbi->gc_thread->gc_wait_queue_head);
+			wake_up_discard_thread(sbi, true);
+		} else {
+			f2fs_msg(sbi->sb, KERN_INFO,
+					"Invalid blocks lower than %d%%,"
+					"skipping rapid GC (%u / (%u - %u))",
+					RAPID_GC_LIMIT_INVALID_BLOCK,
+					invalid_blocks,
+					sbi->user_block_count,
+					written_block_count(sbi));
+		}
+	}
+	mutex_unlock(&f2fs_sbi_mutex);
+}
+
+void f2fs_stop_all_gc_threads(void)
+{
+	struct f2fs_sb_info *sbi;
+
+	mutex_lock(&f2fs_sbi_mutex);
+	list_for_each_entry(sbi, &f2fs_sbi_list, list) {
+		stop_gc_thread(sbi);
+	}
+	mutex_unlock(&f2fs_sbi_mutex);
+}
+
+void f2fs_sbi_list_add(struct f2fs_sb_info *sbi)
+{
+	mutex_lock(&f2fs_sbi_mutex);
+	list_add_tail(&sbi->list, &f2fs_sbi_list);
+	mutex_unlock(&f2fs_sbi_mutex);
+}
+
+void f2fs_sbi_list_del(struct f2fs_sb_info *sbi)
+{
+	mutex_lock(&f2fs_sbi_mutex);
+	list_del(&sbi->list);
+	mutex_unlock(&f2fs_sbi_mutex);
+}
+
+static struct work_struct f2fs_gc_fb_worker;
+static void f2fs_gc_fb_work(struct work_struct *work)
+{
+	if (screen_on) {
+		f2fs_stop_all_gc_threads();
+	} else {
+		/*
+		 * Start all GC threads exclusively from here
+		 * since the phone screen would turn on when
+		 * a charger is connected
+		 */
+		if (TRIGGER_SOFF)
+			f2fs_start_all_gc_threads();
+	}
+}
+
+static int msm_drm_notifier_callback(struct notifier_block *self,
+				unsigned long event, void *data)
+{
+	struct msm_drm_notifier *evdata = data;
+	int *blank;
+
+	if (event != MSM_DRM_EVENT_BLANK)
+		return 0;
+
+	if (evdata->id != MSM_DRM_PRIMARY_DISPLAY)
+		return 0;
+
+	if (evdata && evdata->data) {
+		blank = evdata->data;
+
+		switch (*blank) {
+		case MSM_DRM_BLANK_POWERDOWN:
+			screen_on = false;
+			queue_work(system_power_efficient_wq, &f2fs_gc_fb_worker);
+			break;
+		case MSM_DRM_BLANK_UNBLANK:
+			screen_on = true;
+			queue_work(system_power_efficient_wq, &f2fs_gc_fb_worker);
+			break;
+		}
+	}
+
+	return 0;
+}
+
+static struct notifier_block fb_notifier_block = {
+	.notifier_call = msm_drm_notifier_callback,
+};
+
+static int __init f2fs_gc_register_fb(void)
+{
+	INIT_WORK(&f2fs_gc_fb_worker, f2fs_gc_fb_work);
+	msm_drm_register_client(&fb_notifier_block);
+
+	return 0;
+}
+late_initcall(f2fs_gc_register_fb);
 
 static int select_gc_type(struct f2fs_gc_kthread *gc_th, int gc_type)
 {
@@ -779,14 +947,9 @@ retry:
 		set_cold_data(page);
 
 		err = do_write_data_page(&fio);
-		if (err) {
-			clear_cold_data(page);
-			if (err == -ENOMEM) {
-				congestion_wait(BLK_RW_ASYNC, HZ/50);
-				goto retry;
-			}
-			if (is_dirty)
-				set_page_dirty(page);
+		if (err == -ENOMEM && is_dirty) {
+			congestion_wait(BLK_RW_ASYNC, HZ/50);
+			goto retry;
 		}
 	}
 out:
@@ -871,7 +1034,7 @@ next_step:
 			start_bidx = start_bidx_of_node(nofs, inode);
 			data_page = get_read_data_page(inode,
 					start_bidx + ofs_in_node, REQ_RAHEAD,
-					true);
+					F2FS_GETPAGE_FOR_WRITE);
 			up_write(&F2FS_I(inode)->dio_rwsem[WRITE]);
 			if (IS_ERR(data_page)) {
 				iput(inode);
@@ -976,13 +1139,7 @@ static int do_garbage_collect(struct f2fs_sb_info *sbi,
 			goto next;
 
 		sum = page_address(sum_page);
-		if (type != GET_SUM_TYPE((&sum->footer))) {
-			f2fs_msg(sbi->sb, KERN_ERR, "Inconsistent segment (%u) "
-				"type [%d, %d] in SSA and SIT",
-				segno, type, GET_SUM_TYPE((&sum->footer)));
-			set_sbi_flag(sbi, SBI_NEED_FSCK);
-			goto next;
-		}
+		f2fs_bug_on(sbi, type != GET_SUM_TYPE((&sum->footer)));
 
 		/*
 		 * this is to avoid deadlock:

@@ -280,8 +280,8 @@ static ssize_t dio_complete(struct dio *dio, ssize_t ret, bool is_async)
 		 */
 		dio->iocb->ki_pos += transferred;
 
-		if (ret > 0 && dio->op == REQ_OP_WRITE)
-			ret = generic_write_sync(dio->iocb, ret);
+		if (dio->op == REQ_OP_WRITE)
+			ret = generic_write_sync(dio->iocb,  transferred);
 		dio->iocb->ki_complete(dio->iocb, ret, 0);
 	}
 
@@ -433,12 +433,12 @@ static inline void dio_bio_submit(struct dio *dio, struct dio_submit *sdio)
 #ifdef CONFIG_PFK
 	bio->bi_dio_inode = dio->inode;
 
-/* iv sector for security/pfe/pfk_fscrypt.c and f2fs in fs/f2fs/f2fs.h.*/
-#define PG_DUN_NEW(i,p)                                            \
-	(((((u64)(i)->i_ino) & 0xffffffff) << 32) | ((p) & 0xffffffff))
+/* iv sector for security/pfe/pfk_fscrypt.c and f2fs in fs/f2fs/f2fs.h */
+#define PG_DUN(i,p)                                            \
+	((((i)->i_ino & 0xffffffff) << 32) | ((p) & 0xffffffff))
 
 	if (is_inode_filesystem_type(dio->inode, "f2fs"))
-		fscrypt_set_ice_dun(dio->inode, bio, PG_DUN_NEW(dio->inode,
+		fscrypt_set_ice_dun(dio->inode, bio, PG_DUN(dio->inode,
 			(sdio->logical_offset_in_bio >> PAGE_SHIFT)));
 #endif
 	dio->bio_bdev = bio->bi_bdev;
@@ -468,6 +468,7 @@ struct inode *dio_bio_get_inode(struct bio *bio)
 	return inode;
 }
 EXPORT_SYMBOL(dio_bio_get_inode);
+
 /*
  * Release any resources in case of a failure
  */
@@ -660,6 +661,7 @@ static int get_more_blocks(struct dio *dio, struct dio_submit *sdio,
 	unsigned long fs_count;	/* Number of filesystem-sized blocks */
 	int create;
 	unsigned int i_blkbits = sdio->blkbits + sdio->blkfactor;
+	loff_t i_size;
 
 	/*
 	 * If there was a memory error and we've overwritten all the
@@ -689,8 +691,8 @@ static int get_more_blocks(struct dio *dio, struct dio_submit *sdio,
 		 */
 		create = dio->op == REQ_OP_WRITE;
 		if (dio->flags & DIO_SKIP_HOLES) {
-			if (fs_startblk <= ((i_size_read(dio->inode) - 1) >>
-							i_blkbits))
+			i_size = i_size_read(dio->inode);
+			if (i_size && fs_startblk <= (i_size - 1) >> i_blkbits)
 				create = 0;
 		}
 

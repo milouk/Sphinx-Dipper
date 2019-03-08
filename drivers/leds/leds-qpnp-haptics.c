@@ -2803,7 +2803,9 @@ static int qpnp_haptics_probe(struct platform_device *pdev)
 	}
 
 	pr_info("haptic probe succeed\n");
-        gchip = chip;
+
+	gchip = chip;
+
 	return 0;
 
 sysfs_fail:
